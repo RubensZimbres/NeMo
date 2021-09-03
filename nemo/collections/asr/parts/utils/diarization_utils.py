@@ -1,30 +1,29 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-import csv
+import argparse
 import copy
+import csv
 import json
 import os
 from collections import OrderedDict as od
 from datetime import datetime
+from functools import reduce
 from math import ceil
 from typing import Dict, List, Optional, Union
-from functools import reduce
-import argparse
+
 import librosa
 import matplotlib.pyplot as plt
-
 import numpy as np
 import torch
 import wget
 from omegaconf import OmegaConf
+from pyannote.metrics.diarization import DiarizationErrorRate
 from torchmetrics import Metric
 from tqdm.auto import tqdm
-from pyannote.metrics.diarization import DiarizationErrorRate
 
 from nemo.collections.asr.metrics.wer import WER
 from nemo.collections.asr.models import ClusteringDiarizer, EncDecCTCModel, EncDecCTCModelBPE
-
 from nemo.collections.asr.parts.utils.speaker_utils import audio_rttm_map as get_audio_rttm_map
 from nemo.collections.asr.parts.utils.speaker_utils import (
     labels_to_pyannote_object,
@@ -37,18 +36,22 @@ __all__ = ['ASR_DIAR_OFFLINE']
 
 NONE_LIST = ['None', 'none', 'null', '']
 
+
 def dump_json_to_file(file_path, riva_dict):
     with open(file_path, "w") as outfile:
         json.dump(riva_dict, outfile, indent=4)
+
 
 def write_txt(w_path, val):
     with open(w_path, "w") as output:
         output.write(val + '\n')
     return None
 
+
 def get_uniq_id_from_audio_path(audio_file_path):
     return '.'.join(os.path.basename(audio_file_path).split('.')[:-1])
-    
+
+
 def get_file_lists(file_list_path):
     """Read file paths from the given list
     """
@@ -60,10 +63,10 @@ def get_file_lists(file_list_path):
             for _file in path2file.readlines():
                 uniq_id = get_uniq_id_from_audio_path(_file)
                 out_path_list.append(_file.strip())
-  
+
     return out_path_list
 
-                
+
 class WER_TS(WER):
     """
     This is WER class that is modified for generating timestamps with logits.
@@ -71,6 +74,7 @@ class WER_TS(WER):
     is being saved into a list. Please refer to the definition of WER class for
     more information.
     """
+
     def __init__(
         self,
         vocabulary,
@@ -80,13 +84,7 @@ class WER_TS(WER):
         log_prediction=True,
         dist_sync_on_step=False,
     ):
-        super().__init__(
-        vocabulary,
-        batch_dim_index,
-        use_cer,
-        ctc_decode,
-        log_prediction,
-        dist_sync_on_step)
+        super().__init__(vocabulary, batch_dim_index, use_cer, ctc_decode, log_prediction, dist_sync_on_step)
 
     def decode_tokens_to_str_with_ts(self, tokens: List[int], timestamps: List[int]) -> str:
         hypothesis_list, timestamp_list = self.decode_ids_to_tokens_with_ts(tokens, timestamps)
@@ -103,9 +101,7 @@ class WER_TS(WER):
         return token_list, timestamp_list
 
     def ctc_decoder_predictions_tensor_with_ts(
-        self,
-        predictions: torch.Tensor,
-        predictions_len: torch.Tensor = None,
+        self, predictions: torch.Tensor, predictions_len: torch.Tensor = None,
     ) -> List[str]:
         hypotheses, timestamps = [], []
 
@@ -114,7 +110,7 @@ class WER_TS(WER):
             prediction = prediction_cpu_tensor[ind].detach().numpy().tolist()
             if predictions_len is not None:
                 prediction = prediction[: predictions_len[ind]]
-            
+
             # CTC decoding procedure with timestamps
             decoded_prediction, decoded_timing_list = [], []
             previous = self.blank_id
@@ -129,6 +125,7 @@ class WER_TS(WER):
             timestamps.append(timestamp_list)
 
         return hypotheses, timestamps
+
 
 class ASR_DIAR_OFFLINE(object):
     def __init__(self, params):
@@ -149,8 +146,8 @@ class ASR_DIAR_OFFLINE(object):
             raise NotImplementedError
         else:
             raise ValueError(f"ASR model name not found: {self.params['ASR_model_name']}")
-        
-        return asr_model 
+
+        return asr_model
 
     def create_directories(self):
         """Creates directories for transcribing with diarization.
@@ -158,17 +155,17 @@ class ASR_DIAR_OFFLINE(object):
 
         ROOT = os.path.join(os.getcwd(), 'asr_with_diar')
         self.oracle_vad_dir = os.path.join(ROOT, 'oracle_vad')
-        self.json_result_dir = (os.path.join(ROOT, 'json_result'))
-        self.trans_with_spks_dir= os.path.join(ROOT, 'transcript_with_speaker_labels')
-        self.audacity_label_dir= os.path.join(ROOT, 'audacity_label')
-        
+        self.json_result_dir = os.path.join(ROOT, 'json_result')
+        self.trans_with_spks_dir = os.path.join(ROOT, 'transcript_with_speaker_labels')
+        self.audacity_label_dir = os.path.join(ROOT, 'audacity_label')
+
         self.root_path = ROOT
         os.makedirs(self.root_path, exist_ok=True)
         os.makedirs(self.oracle_vad_dir, exist_ok=True)
         os.makedirs(self.json_result_dir, exist_ok=True)
         os.makedirs(self.trans_with_spks_dir, exist_ok=True)
         os.makedirs(self.audacity_label_dir, exist_ok=True)
-        
+
         data_dir = os.path.join(ROOT, 'data')
         os.makedirs(data_dir, exist_ok=True)
 
@@ -183,7 +180,7 @@ class ASR_DIAR_OFFLINE(object):
                 The list of audio file paths.
         """
         trans_logit_timestamps_list = []
-        
+
         # A part of decoder instance
         wer_ts = WER_TS(
             vocabulary=_asr_model.decoder.vocabulary,
@@ -192,18 +189,17 @@ class ASR_DIAR_OFFLINE(object):
             ctc_decode=True,
             dist_sync_on_step=True,
             log_prediction=_asr_model._cfg.get("log_prediction", False),
-            )
+        )
 
         with torch.cuda.amp.autocast():
-            transcript_logits_list = _asr_model.transcribe(
-                audio_file_list, batch_size=1, logprobs=True
-            )
+            transcript_logits_list = _asr_model.transcribe(audio_file_list, batch_size=1, logprobs=True)
             for logit_np in transcript_logits_list:
                 log_prob = torch.from_numpy(logit_np)
                 logits_len = torch.from_numpy(np.array([log_prob.shape[0]]))
                 greedy_predictions = log_prob.argmax(dim=-1, keepdim=False).unsqueeze(0)
-                text, ts = wer_ts.ctc_decoder_predictions_tensor_with_ts(greedy_predictions, 
-                                                                         predictions_len=logits_len)
+                text, ts = wer_ts.ctc_decoder_predictions_tensor_with_ts(
+                    greedy_predictions, predictions_len=logits_len
+                )
                 trans_logit_timestamps_list.append([text[0], logit_np, ts[0]])
         return trans_logit_timestamps_list
 
@@ -212,7 +208,7 @@ class ASR_DIAR_OFFLINE(object):
         Not implemented Yet
         """
         trans_logit_timestamps_list = []
-        
+
         # A part of decoder instance
         wer_ts = WER_TS(
             vocabulary=_asr_model.decoder.vocabulary,
@@ -221,25 +217,23 @@ class ASR_DIAR_OFFLINE(object):
             ctc_decode=True,
             dist_sync_on_step=True,
             log_prediction=_asr_model._cfg.get("log_prediction", False),
-            )
-
+        )
 
         with torch.cuda.amp.autocast():
 
             trans = _asr_model.transcribe(audio_file_list, batch_size=1)
-            transcript_logits_list = _asr_model.transcribe(
-                audio_file_list, batch_size=1, logprobs=True
-            )
+            transcript_logits_list = _asr_model.transcribe(audio_file_list, batch_size=1, logprobs=True)
             for logit_np in transcript_logits_list:
                 log_prob = torch.from_numpy(logit_np)
                 logits_len = torch.from_numpy(np.array([log_prob.shape[0]]))
                 greedy_predictions = log_prob.argmax(dim=-1, keepdim=False).unsqueeze(0)
-                text, ts = wer_ts.ctc_decoder_predictions_tensor_with_ts(greedy_predictions, 
-                                                                         predictions_len=logits_len)
+                text, ts = wer_ts.ctc_decoder_predictions_tensor_with_ts(
+                    greedy_predictions, predictions_len=logits_len
+                )
                 trans_logit_timestamps_list.append([text[0], logit_np, ts[0]])
         return trans_logit_timestamps_list
         # pass
-    
+
     def get_speech_labels_list(self, transcript_logits_list, audio_file_list):
         """
         Get non_speech labels from logit output. The logit output is obtained from
@@ -259,16 +253,18 @@ class ASR_DIAR_OFFLINE(object):
 
             _trans, _timestamps = self.clean_trans_and_TS(trans, timestamps)
             _spaces, _trans_words = self._get_spaces(_trans, _timestamps)
-            
+
             if not self.params['external_oracle_vad']:
                 blanks = self._get_silence_timestamps(probs, symbol_idx=28, state_symbol='blank')
                 non_speech = self.threshold_non_speech(blanks, self.params)
-            
+
                 speech_labels = self.get_speech_labels_from_nonspeech(probs, non_speech)
                 self.write_VAD_rttm_from_speech_labels(self.root_path, AUDIO_FILENAME, speech_labels)
-            
+
             word_timetamps_middle = [[_spaces[k][1], _spaces[k + 1][0]] for k in range(len(_spaces) - 1)]
-            word_timetamps = [[timestamps[0], _spaces[0][0]]] + word_timetamps_middle + [[_spaces[-1][1], logit.shape[0]]]
+            word_timetamps = (
+                [[timestamps[0], _spaces[0][0]]] + word_timetamps_middle + [[_spaces[-1][1], logit.shape[0]]]
+            )
 
             word_ts_list.append(word_timetamps)
             spaces_list.append(_spaces)
@@ -307,7 +303,7 @@ class ASR_DIAR_OFFLINE(object):
                     idx_state = idx
 
         if state == state_symbol:
-            spaces.append([idx_state, len(probs)-1])
+            spaces.append([idx_state, len(probs) - 1])
 
         return spaces
 
@@ -350,7 +346,7 @@ class ASR_DIAR_OFFLINE(object):
         config.diarizer.speaker_embeddings.window_length_in_sec = self.params['window_length_in_sec']
         oracle_model = ClusteringDiarizer(cfg=config)
         oracle_model.diarize()
-    
+
     def eval_diarization(self, audio_file_list, ref_rttm_file_list):
         """
         Evaluate the predicted speaker labels (pred_rttm) using ref_rttm_file_list.
@@ -367,7 +363,7 @@ class ASR_DIAR_OFFLINE(object):
         DER_result_dict = {}
         count_correct_spk_counting = 0
 
-        if ref_rttm_file_list == []: 
+        if ref_rttm_file_list == []:
             for k, audio_file_path in enumerate(audio_file_list):
                 uniq_id = get_uniq_id_from_audio_path(audio_file_path)
                 pred_rttm = os.path.join(self.oracle_vad_dir, 'pred_rttms', uniq_id + '.rttm')
@@ -378,7 +374,7 @@ class ASR_DIAR_OFFLINE(object):
 
             return diar_labels, None, None
 
-        else: 
+        else:
             audio_rttm_map = get_audio_rttm_map(audio_file_list, ref_rttm_file_list)
             for k, audio_file_path in enumerate(audio_file_list):
                 uniq_id = get_uniq_id_from_audio_path(audio_file_path)
@@ -400,9 +396,15 @@ class ASR_DIAR_OFFLINE(object):
                 hypothesis = labels_to_pyannote_object(pred_labels)
                 all_hypotheses.append(hypothesis)
                 DER, CER, FA, MISS, mapping = self.get_DER([reference], [hypothesis])
-                DER_result_dict[uniq_id] = {"DER": DER, "CER": CER, "FA": FA, "MISS": MISS, 
-                                            "n_spk": est_n_spk, "mapping": mapping[0], 
-                                            "spk_counting": (est_n_spk == ref_n_spk) }
+                DER_result_dict[uniq_id] = {
+                    "DER": DER,
+                    "CER": CER,
+                    "FA": FA,
+                    "MISS": MISS,
+                    "n_spk": est_n_spk,
+                    "mapping": mapping[0],
+                    "spk_counting": (est_n_spk == ref_n_spk),
+                }
                 count_correct_spk_counting += int(est_n_spk == ref_n_spk)
 
             DER, CER, FA, MISS, mapping = self.get_DER(all_references, all_hypotheses)
@@ -412,18 +414,17 @@ class ASR_DIAR_OFFLINE(object):
                     FA, MISS, DER, CER
                 )
             )
-            DER_result_dict['total'] = {"DER": DER, "CER": CER, "FA": FA, "MISS": MISS, 
-                    "spk_counting_acc": count_correct_spk_counting/len(audio_file_list)}
+            DER_result_dict['total'] = {
+                "DER": DER,
+                "CER": CER,
+                "FA": FA,
+                "MISS": MISS,
+                "spk_counting_acc": count_correct_spk_counting / len(audio_file_list),
+            }
             return diar_labels, ref_labels_list, DER_result_dict
 
     def write_json_and_transcript(
-        self,
-        audio_file_list,
-        transcript_logits_list,
-        diar_labels,
-        word_list,
-        word_ts_list,
-        spaces_list,
+        self, audio_file_list, transcript_logits_list, diar_labels, word_list, word_ts_list, spaces_list,
     ):
         total_riva_dict = {}
         for k, audio_file_path in enumerate(audio_file_list):
@@ -432,13 +433,15 @@ class ASR_DIAR_OFFLINE(object):
             audacity_label_words = []
             n_spk = self.get_num_of_spk_from_labels(labels)
             string_out = ''
-            riva_dict = od({
-                'status': 'Success',
-                'session_id': uniq_id,
-                'transcription': ' '.join(word_list[k]),
-                'speaker_count': n_spk,
-                'words': [],
-            })
+            riva_dict = od(
+                {
+                    'status': 'Success',
+                    'session_id': uniq_id,
+                    'transcription': ' '.join(word_list[k]),
+                    'speaker_count': n_spk,
+                    'words': [],
+                }
+            )
 
             start_point, end_point, speaker = labels[0].split()
             words = word_list[k]
@@ -456,26 +459,23 @@ class ASR_DIAR_OFFLINE(object):
                     string_out = self.print_word(string_out, words[j], self.params)
                 else:
                     idx += 1
-                    idx = min(idx, len(labels)-1)
+                    idx = min(idx, len(labels) - 1)
                     start_point, end_point, speaker = labels[idx].split()
                     string_out = self.print_time(string_out, speaker, start_point, end_point, self.params)
                     string_out = self.print_word(string_out, words[j], self.params)
 
                 stt_sec, end_sec = self.get_timestamp_in_sec(word_ts_stt_end, self.params)
-                riva_dict = self.add_json_to_dict(
-                    riva_dict, words[j], stt_sec, end_sec, speaker
-                )  
-                
+                riva_dict = self.add_json_to_dict(riva_dict, words[j], stt_sec, end_sec, speaker)
+
                 total_riva_dict[uniq_id] = riva_dict
-                audacity_label_words = self.get_audacity_label(words[j], 
-                                                              stt_sec, end_sec,
-                                                              speaker,
-                                                              audacity_label_words)
-            
+                audacity_label_words = self.get_audacity_label(
+                    words[j], stt_sec, end_sec, speaker, audacity_label_words
+                )
+
             self.write_and_log(uniq_id, riva_dict, string_out, audacity_label_words)
 
         return total_riva_dict
-    
+
     def get_WDER(self, total_riva_dict, DER_result_dict, audio_file_list, ref_labels_list):
         """
         Calculate Word-level Diarization Error Rate (WDER). WDER is calculated by
@@ -496,15 +496,15 @@ class ASR_DIAR_OFFLINE(object):
         wder_dict = {}
         grand_total_word_count, grand_correct_word_count = 0, 0
         for k, audio_file_path in enumerate(audio_file_list):
-            
+
             labels = ref_labels_list[k]
             uniq_id = get_uniq_id_from_audio_path(audio_file_path)
             mapping_dict = DER_result_dict[uniq_id]['mapping']
             words_list = total_riva_dict[uniq_id]['words']
-            
+
             idx, correct_word_count = 0, 0
-            total_word_count = len(words_list) 
-            ref_label_list = [ [float(x.split()[0]), float(x.split()[1])] for x in labels ] 
+            total_word_count = len(words_list)
+            ref_label_list = [[float(x.split()[0]), float(x.split()[1])] for x in labels]
             ref_label_array = np.array(ref_label_list)
 
             for wdict in words_list:
@@ -521,27 +521,27 @@ class ASR_DIAR_OFFLINE(object):
                     continue
 
                 ovl_length = self.getOverlapRangeArray(ref_label_array, word_range_tile)
-                
+
                 if self.params['lenient_overlap_WDER']:
                     ovl_length_list = list(ovl_length[ovl_bool])
                     max_ovl_sub_idx = np.where(ovl_length_list == np.max(ovl_length_list))[0]
-                    max_ovl_idx = np.where(ovl_bool==True)[0][max_ovl_sub_idx]
-                    ref_spk_labels = [ x.split()[-1] for x in list(np.array(labels)[max_ovl_idx]) ]
+                    max_ovl_idx = np.where(ovl_bool == True)[0][max_ovl_sub_idx]
+                    ref_spk_labels = [x.split()[-1] for x in list(np.array(labels)[max_ovl_idx])]
                     if est_spk_label in ref_spk_labels:
                         correct_word_count += 1
-                else: 
+                else:
                     max_ovl_sub_idx = np.argmax(ovl_length[ovl_bool])
-                    max_ovl_idx = np.where(ovl_bool==True)[0][max_ovl_sub_idx]
+                    max_ovl_idx = np.where(ovl_bool == True)[0][max_ovl_sub_idx]
                     _, _, ref_spk_label = labels[max_ovl_idx].split()
                     correct_word_count += int(est_spk_label == ref_spk_label)
 
-            wder= 1 - (correct_word_count/total_word_count)
+            wder = 1 - (correct_word_count / total_word_count)
             grand_total_word_count += total_word_count
             grand_correct_word_count += correct_word_count
 
             wder_dict[uniq_id] = wder
 
-        wder_dict['total'] = 1 - (grand_correct_word_count/grand_total_word_count)
+        wder_dict['total'] = 1 - (grand_correct_word_count / grand_total_word_count)
         print("Total WDER: ", wder_dict['total'])
 
         return wder_dict
@@ -561,7 +561,7 @@ class ASR_DIAR_OFFLINE(object):
         frame_offset = params['offset'] / params['time_stride']
         speech_labels = []
 
-        if len(non_speech)>0:
+        if len(non_speech) > 0:
             for idx in range(len(non_speech) - 1):
                 start = (non_speech[idx][1] + frame_offset) * params['time_stride']
                 end = (non_speech[idx + 1][0] + frame_offset) * params['time_stride']
@@ -572,31 +572,31 @@ class ASR_DIAR_OFFLINE(object):
                 end = (len(probs) + frame_offset) * params['time_stride']
                 speech_labels.append("{:.3f} {:.3f} speech".format(start, end))
         else:
-            start=0
-            end=(len(probs) + frame_offset) * params['time_stride']
+            start = 0
+            end = (len(probs) + frame_offset) * params['time_stride']
             speech_labels.append("{:.3f} {:.3f} speech".format(start, end))
 
         return speech_labels
-    
+
     def write_result_in_csv(self, args, WDER_dict, DER_result_dict, effective_WDER):
         """
         This function is for development use.
         Saves the diariazation result into a csv file.
         """
         row = [
-        args.threshold, 
-        WDER_dict['total'], 
-        DER_result_dict['total']['DER'],
-        DER_result_dict['total']['FA'],
-        DER_result_dict['total']['MISS'],
-        DER_result_dict['total']['CER'],
-        DER_result_dict['total']['spk_counting_acc'],
-        effective_WDER
+            args.threshold,
+            WDER_dict['total'],
+            DER_result_dict['total']['DER'],
+            DER_result_dict['total']['FA'],
+            DER_result_dict['total']['MISS'],
+            DER_result_dict['total']['CER'],
+            DER_result_dict['total']['spk_counting_acc'],
+            effective_WDER,
         ]
 
-        with open(os.path.join(self.root_path, args.csv), 'a') as csvfile: 
-            csvwriter = csv.writer(csvfile) 
-            csvwriter.writerow(row) 
+        with open(os.path.join(self.root_path, args.csv), 'a') as csvfile:
+            csvwriter = csv.writer(csvfile)
+            csvwriter.writerow(row)
 
     @staticmethod
     def _get_spaces(trans, timestamps):
@@ -623,20 +623,19 @@ class ASR_DIAR_OFFLINE(object):
             word_list.append(trans[stt_idx:])
 
         return spaces, word_list
-    
+
     def write_and_log(self, uniq_id, riva_dict, string_out, audacity_label_words):
         """Writes output files and display logging messages.
         """
         ROOT = self.root_path
         logging.info(f"Writing {ROOT}/json_result/{uniq_id}.json")
         dump_json_to_file(f'{ROOT}/json_result/{uniq_id}.json', riva_dict)
-        
+
         logging.info(f"Writing {ROOT}/transcript_with_speaker_labels/{uniq_id}.txt")
         write_txt(f'{ROOT}/transcript_with_speaker_labels/{uniq_id}.txt', string_out.strip())
-        
+
         logging.info(f"Writing {ROOT}/audacity_label/{uniq_id}.w.label")
         write_txt(f'{ROOT}/audacity_label/{uniq_id}.w.label', '\n'.join(audacity_label_words))
-    
 
     @staticmethod
     def clean_trans_and_TS(trans, timestamps):
@@ -654,13 +653,13 @@ class ASR_DIAR_OFFLINE(object):
         assert len(trans) == len(timestamps)
 
         trans = trans.lstrip()
-        diff_L= len(timestamps) - len(trans)
+        diff_L = len(timestamps) - len(trans)
         timestamps = timestamps[diff_L:]
-        
+
         trans = trans.rstrip()
         diff_R = len(timestamps) - len(trans)
         if diff_R > 0:
-            timestamps = timestamps[:-1*diff_R]
+            timestamps = timestamps[: -1 * diff_R]
         return trans, timestamps
 
     @staticmethod
@@ -673,7 +672,7 @@ class ASR_DIAR_OFFLINE(object):
                 start, end, speaker = spl.split()
                 start, end = float(start), float(end)
                 f.write("SPEAKER {} 1 {:.3f} {:.3f} <NA> <NA> speech <NA>\n".format(uniq_id, start, end - start))
-    
+
     @staticmethod
     def write_VAD_rttm(oracle_vad_dir, audio_file_list):
         """
@@ -696,7 +695,7 @@ class ASR_DIAR_OFFLINE(object):
             paths2audio_files=audio_file_list, paths2rttm_files=rttm_file_list, manifest_file=oracle_manifest
         )
         return oracle_manifest
-    
+
     @staticmethod
     def get_DER(all_reference, all_hypothesis):
         """
@@ -712,7 +711,7 @@ class ASR_DIAR_OFFLINE(object):
 
         """
         metric = DiarizationErrorRate(collar=0.5, skip_overlap=True, uem=None)
-        
+
         mapping_dict = {}
         for k, (reference, hypothesis) in enumerate(zip(all_reference, all_hypothesis)):
             metric(reference, hypothesis, detailed=True)
@@ -722,17 +721,19 @@ class ASR_DIAR_OFFLINE(object):
         CER = metric['confusion'] / metric['total']
         FA = metric['false alarm'] / metric['total']
         MISS = metric['missed detection'] / metric['total']
-        
+
         metric.reset()
         return DER, CER, FA, MISS, mapping_dict
-    
+
     @staticmethod
     def threshold_non_speech(source_list, params):
         return list(filter(lambda x: x[1] - x[0] > params['threshold'], source_list))
 
     @staticmethod
     def get_effective_WDER(DER_result_dict, WDER_dict):
-        return 1 - ((1 - (DER_result_dict['total']['FA'] + DER_result_dict['total']['MISS'])) * (1 - WDER_dict['total']))
+        return 1 - (
+            (1 - (DER_result_dict['total']['FA'] + DER_result_dict['total']['MISS'])) * (1 - WDER_dict['total'])
+        )
 
     @staticmethod
     def isOverlapArray(rangeA, rangeB):
@@ -744,7 +745,7 @@ class ASR_DIAR_OFFLINE(object):
     def getOverlapRangeArray(rangeA, rangeB):
         left = np.max(np.vstack((rangeA[:, 0], rangeB[:, 0])), axis=0)
         right = np.min(np.vstack((rangeA[:, 1], rangeB[:, 1])), axis=0)
-        return right-left
+        return right - left
 
     @staticmethod
     def get_timestamp_in_sec(word_ts_stt_end, params):
@@ -783,19 +784,13 @@ class ASR_DIAR_OFFLINE(object):
     def softmax(logits):
         e = np.exp(logits - np.max(logits))
         return e / e.sum(axis=-1).reshape([logits.shape[0], 1])
-    
+
     @staticmethod
     def get_num_of_spk_from_labels(labels):
         spk_set = [x.split(' ')[-1].strip() for x in labels]
         return len(set(spk_set))
-            
+
     @staticmethod
     def add_json_to_dict(riva_dict, word, stt, end, speaker):
-        riva_dict['words'].append({'word': word,
-                                    'start_time': stt,
-                                    'end_time': end,
-                                    'speaker_label': speaker
-                                    })
+        riva_dict['words'].append({'word': word, 'start_time': stt, 'end_time': end, 'speaker_label': speaker})
         return riva_dict
-
-
