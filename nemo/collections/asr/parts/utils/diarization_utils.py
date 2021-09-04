@@ -1,26 +1,18 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-import argparse
-import copy
 import csv
 import json
 import os
 from collections import OrderedDict as od
 from datetime import datetime
-from functools import reduce
-from math import ceil
-from typing import Dict, List, Optional, Union
+from typing import List
 
-import librosa
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import wget
 from omegaconf import OmegaConf
 from pyannote.metrics.diarization import DiarizationErrorRate
-from torchmetrics import Metric
-from tqdm.auto import tqdm
 
 from nemo.collections.asr.metrics.wer import WER
 from nemo.collections.asr.models import ClusteringDiarizer, EncDecCTCModel, EncDecCTCModelBPE
@@ -61,7 +53,6 @@ def get_file_lists(file_list_path):
     else:
         with open(file_list_path, 'r') as path2file:
             for _file in path2file.readlines():
-                uniq_id = get_uniq_id_from_audio_path(_file)
                 out_path_list.append(_file.strip())
 
     return out_path_list
@@ -138,10 +129,10 @@ class ASR_DIAR_OFFLINE(object):
             self.run_ASR = self.run_ASR_QuartzNet_CTC
             asr_model = EncDecCTCModel.from_pretrained(model_name=ASR_model_name, strict=False)
         elif 'conformer' in ASR_model_name:
+            self.run_ASR = self.run_ASR_Conformer_CTC
+            asr_model = EncDecCTCModelBPE.from_pretrained(model_name=ASR_model_name, strict=False)
             raise NotImplementedError
             # This option has not been implemented yet.
-            # self.run_ASR = self.run_ASR_Conformer_CTC
-            # asr_model = EncDecCTCModelBPE.from_pretrained(model_name=ASR_model_name, strict=False)
         elif 'citrinet' in ASR_model_name:
             raise NotImplementedError
         else:
@@ -220,8 +211,6 @@ class ASR_DIAR_OFFLINE(object):
         )
 
         with torch.cuda.amp.autocast():
-
-            trans = _asr_model.transcribe(audio_file_list, batch_size=1)
             transcript_logits_list = _asr_model.transcribe(audio_file_list, batch_size=1, logprobs=True)
             for logit_np in transcript_logits_list:
                 log_prob = torch.from_numpy(logit_np)
@@ -232,7 +221,6 @@ class ASR_DIAR_OFFLINE(object):
                 )
                 trans_logit_timestamps_list.append([text[0], logit_np, ts[0]])
         return trans_logit_timestamps_list
-        # pass
 
     def get_speech_labels_list(self, transcript_logits_list, audio_file_list):
         """
@@ -331,7 +319,6 @@ class ASR_DIAR_OFFLINE(object):
 
         MODEL_CONFIG = os.path.join(data_dir, 'speaker_diarization.yaml')
         if not os.path.exists(MODEL_CONFIG):
-            config_url = self.params['diar_config_url']
             MODEL_CONFIG = wget.download(self.params['diar_config_url'], data_dir)
 
         config = OmegaConf.load(MODEL_CONFIG)
@@ -451,8 +438,6 @@ class ASR_DIAR_OFFLINE(object):
 
             word_pos, idx = 0, 0
             for j, word_ts_stt_end in enumerate(word_ts_list[k]):
-                space_stt_end = [word_ts_stt_end[1], word_ts_stt_end[1]] if j == len(spaces) else spaces[j]
-                trans, logits, timestamps = transcript_logits_list[k]
 
                 word_pos = self.params['offset'] + word_ts_stt_end[0] * self.params['time_stride']
                 if word_pos < float(end_point):

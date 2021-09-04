@@ -5,10 +5,7 @@ import argparse
 
 from nemo.collections.asr.parts.utils.diarization_utils import (
     ASR_DIAR_OFFLINE,
-    dump_json_to_file,
     get_file_lists,
-    get_uniq_id_from_audio_path,
-    write_txt,
 )
 from nemo.utils import logging
 
@@ -64,7 +61,6 @@ params = {
     "round_float": 2,
     "window_length_in_sec": 1.5,
     "shift_length_in_sec": 0.75,
-    "round_float": 2,
     "print_transcript": False,
     "lenient_overlap_WDER": True,  # False,
     "threshold": args.threshold,  # minimun width to consider non-speech activity
