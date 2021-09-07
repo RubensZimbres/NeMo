@@ -3,10 +3,7 @@
 
 import argparse
 
-from nemo.collections.asr.parts.utils.diarization_utils import (
-    ASR_DIAR_OFFLINE,
-    get_file_lists,
-)
+from nemo.collections.asr.parts.utils.diarization_utils import ASR_DIAR_OFFLINE, get_file_lists
 from nemo.utils import logging
 
 """
