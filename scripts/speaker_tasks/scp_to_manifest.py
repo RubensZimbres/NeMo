@@ -24,13 +24,6 @@ from tqdm import tqdm
 
 random.seed(42)
 
-random.seed(42)
-
-random.seed(42)
-
-random.seed(42)
-
-
 """
 This scipt converts a scp file where each line contains  
 <absolute path of wav file> 
