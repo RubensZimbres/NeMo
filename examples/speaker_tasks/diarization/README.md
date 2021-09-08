@@ -7,7 +7,7 @@ Documentation section for speaker related tasks can be found at:
 
 ## Features of NeMo Speaker Diarization
 - Provides pretrained speaker embedding extractor models and VAD models.
-- Does not need to be tuned on dev-set, shows better performance than AHC+PLDA method in general.
+- Does not need to be tuned on dev-set while showing the better performance than AHC+PLDA method in general.
 - Estimates the number of speakers in the given session.
 - Provides example script for asr transcription with speaker labels. 
 
@@ -20,7 +20,7 @@ Diarization Error Rate (DER) table of `ecapa_tdnn.nemo` model on well known eval
 |  Oracle VAD <br>KNOWN # of Speakers  |      7.1     |      1.94      |         2.31        |  1.19 |
 | Oracle VAD<br> UNKNOWN # of Speakers |     6.78     |      2.58      |         2.13        |  1.73 |
 
-* All models were tested using embedding extractor window size 1.5s and shift length 0.75s
+* All models were tested using embedding extractor with window size 1.5s and shift length 0.75s
 * The above result is based on the oracle Voice Activity Detection (VAD) result.
 * This result is based on [ecapa_tdnn.nemo](https://ngc.nvidia.com/catalog/models/nvidia:nemo:ecapa_tdnn) model which will be soon uploaded on NGC.
 
@@ -116,33 +116,36 @@ Example: `my_wav_rttm.list`
 
 <br/>
 
-## Speech Recognition with Speaker Diarization
+## Run Speech Recognition with Speaker Diarization
 
-The following script can run ASR followed by speaker diarization so that you can transcribe your audio files with speaker labels as example output shown below:
+Using the script `asr_with_diarization.py`, you can transcribe your audio recording with speaker labels as shown below:
 
 ```
-[00:03.34 - 00:04.46] speaker_0: back from the gym oh good how's it going oh
-[00:04.46 - 00:09.96] speaker_1: pretty well it was really crowded today yeah i kind of assumed everylonewould be at the shore uhhuh
+[00:03.34 - 00:04.46] speaker_0: back from the gym oh good how's it going 
+[00:04.46 - 00:09.96] speaker_1: oh pretty well it was really crowded today yeah i kind of assumed everylonewould be at the shore uhhuh
 [00:12.10 - 00:13.97] speaker_0: well it's the middle of the week or whatever so
-[00:13.97 - 00:15.78] speaker_1: but it's the fourth of july mm
-[00:16.90 - 00:21.80] speaker_0: so yeahg people still work tomorrow do you have to work tomorrow did you drive off yesterday
 ```
+
 Currently, asr_with_diarization only supports QuartzNet English model ([`QuartzNet15x5Base`](https://docs.nvidia.com/deeplearning/nemo/user-guide/docs/en/main/asr/models.html#id110)). 
 
+#### Example script
+
 ```bash
-python asr_with_diarization.py.py \
+python asr_with_diarization.py \
     --pretrained_speaker_model='speakerdiarization_speakernet' \
     --audiofile_list_path='my_wav.list' \
 ```
 If you have reference rttm files or oracle number of speaker information, you can provide those files as in the following example.
 
 ```bash
-python asr_with_diarization.py.py \
+python asr_with_diarization.py \
     --pretrained_speaker_model='speakerdiarization_speakernet' \
     --audiofile_list_path='my_wav.list' \
     --reference_rttmfile_list_path='my_wav_rttm.list'\
     --oracle_num_speakers=number_of_speakers.list
 ```
+
+#### Output folders
 
 The above script will create a folder named `./asr_with_diar/`.
 In `./asr_with_diar/`, you can check the results as below.
@@ -198,7 +201,7 @@ Example: `./asr_with_diar/json_result/my_audio1.json`
 
 Example: `./asr_with_diar/transcript_with_speaker_labels/my_audio1.txt`
 ```
-[00:03.34 - 00:04.46] speaker_0: back from the gym oh good how's it going oh
+[00:03.34 - 00:04.46] speaker_0: back from the gym oh good how's it going
 [00:04.46 - 00:09.96] speaker_1: pretty well it was really crowded today yeah i kind of assumed everylonewould be at the shore uhhuh
 [00:12.10 - 00:13.97] speaker_0: well it's the middle of the week or whatever so
 [00:13.97 - 00:15.78] speaker_1: but it's the fourth of july mm
