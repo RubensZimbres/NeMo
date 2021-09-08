@@ -7,26 +7,14 @@ from nemo.collections.asr.parts.utils.diarization_utils import ASR_DIAR_OFFLINE,
 from nemo.utils import logging
 
 """
-Supported ASR models: QuartzNet15x5Base
+Currently Supported ASR models:
 
-CH109: All sessions have two speakers.
-
-python get_json_ASR_and_diarization.py \
---audiofile_list_path='/disk2/scps/audio_scps/callhome_ch109.scp' \
---reference_rttmfile_list_path='/disk2/scps/rttm_scps/callhome_ch109.rttm' \
---oracle_num_speakers=2
-
-AMI: Oracle number of speakers in EN2002c.Mix-Lapel is 3, not 4.
-
-python get_json_ASR_and_diarization.py \
---audiofile_list_path='/disk2/datasets/amicorpus/mixheadset_test_wav.list' \
---reference_rttmfile_list_path='/disk2/datasets/amicorpus/mixheadset_test_rttm.list' \
---oracle_num_speakers=2
+QuartzNet15x5Base
 
 """
 
 CONFIG_URL = (
-    "https://raw.githubusercontent.com/NVIDIA/NeMo/stable/examples/speaker_recognition/conf/speaker_diarization.yaml"
+    "https://raw.githubusercontent.com/NVIDIA/NeMo/main/examples/speaker_tasks/diarization/conf/speaker_diarization.yaml"
 )
 
 parser = argparse.ArgumentParser()
@@ -96,22 +84,17 @@ if args.reference_rttmfile_list_path:
         audio_file_list, ref_rttm_file_list
     )
 
-    total_riva_dict = asr_diar_offline.write_json_and_transcript(
-        audio_file_list, transcript_logits_list, diar_labels, word_list, word_ts_list, spaces_list,
-    )
-
-    WDER_dict = asr_diar_offline.get_WDER(total_riva_dict, DER_result_dict, audio_file_list, ref_labels_list)
-
-    effective_WDER = asr_diar_offline.get_effective_WDER(DER_result_dict, WDER_dict)
-
     logging.info(
-        f" total \nWDER : {WDER_dict['total']:.4f} \
-                          \nDER  : {DER_result_dict['total']['DER']:.4f} \
-                          \nFA   : {DER_result_dict['total']['FA']:.4f} \
-                          \nMISS : {DER_result_dict['total']['MISS']:.4f} \
-                          \nCER  : {DER_result_dict['total']['CER']:.4f} \
-                          \nspk_counting_acc : {DER_result_dict['total']['spk_counting_acc']:.4f} \
-                          \neffective_WDER : {effective_WDER:.4f}"
+        f"\nDER  : {DER_result_dict['total']['DER']:.4f} \
+          \nFA   : {DER_result_dict['total']['FA']:.4f} \
+          \nMISS : {DER_result_dict['total']['MISS']:.4f} \
+          \nCER  : {DER_result_dict['total']['CER']:.4f} \
+          \nspk_counting_acc : {DER_result_dict['total']['spk_counting_acc']:.4f}"
     )
+else:
+    diar_labels = asr_diar_offline.get_diarization_labels(audio_file_list)
 
-    asr_diar_offline.write_result_in_csv(args, WDER_dict, DER_result_dict, effective_WDER)
+total_riva_dict = asr_diar_offline.write_json_and_transcript(
+    audio_file_list, diar_labels, word_list, word_ts_list, 
+)
+

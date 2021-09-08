@@ -26,7 +26,7 @@ python speaker_reco.py --config_path='conf' --config_name='SpeakerNet_ECAPA.yaml
 For step by step tutorial see [notebook](https://github.com/NVIDIA/NeMo/blob/main/tutorials/speaker_recognition/Speaker_Recognition_Verification.ipynb).
 
 ### Fine Tuning
-For fine Tuning on a pretrained .nemo speaker recognition model,
+For fine tuning on a pretrained .nemo speaker recognition model,
 ```bash
 python speaker_reco_finetune.py --pretrained_model='/path/to/.nemo_or_.ckpt/file' --finetune_config_file='/path/to/finetune/config/yaml/file' 
 ```

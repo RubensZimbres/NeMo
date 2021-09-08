@@ -333,6 +333,27 @@ class ASR_DIAR_OFFLINE(object):
         config.diarizer.speaker_embeddings.window_length_in_sec = self.params['window_length_in_sec']
         oracle_model = ClusteringDiarizer(cfg=config)
         oracle_model.diarize()
+        
+
+    def get_diarization_labels(self, audio_file_list):
+        """
+        Save the diarization labels into a list.
+
+        Arg:
+            audio_file_list (list):
+                The list of audio file paths.
+        """
+        diar_labels = []
+        for k, audio_file_path in enumerate(audio_file_list):
+            uniq_id = get_uniq_id_from_audio_path(audio_file_path)
+            pred_rttm = os.path.join(self.oracle_vad_dir, 'pred_rttms', uniq_id + '.rttm')
+            pred_labels = rttm_to_labels(pred_rttm)
+            diar_labels.append(pred_labels)
+            est_n_spk = self.get_num_of_spk_from_labels(pred_labels)
+            logging.info(f"Estimated n_spk [{uniq_id}]: {est_n_spk}")
+
+        return diar_labels
+
 
     def eval_diarization(self, audio_file_list, ref_rttm_file_list):
         """
@@ -350,73 +371,61 @@ class ASR_DIAR_OFFLINE(object):
         DER_result_dict = {}
         count_correct_spk_counting = 0
 
-        if ref_rttm_file_list == []:
-            for k, audio_file_path in enumerate(audio_file_list):
-                uniq_id = get_uniq_id_from_audio_path(audio_file_path)
-                pred_rttm = os.path.join(self.oracle_vad_dir, 'pred_rttms', uniq_id + '.rttm')
-                pred_labels = rttm_to_labels(pred_rttm)
-                diar_labels.append(pred_labels)
-                est_n_spk = self.get_num_of_spk_from_labels(pred_labels)
-                logging.info(f"Estimated n_spk [{uniq_id}]: {est_n_spk}")
+        audio_rttm_map = get_audio_rttm_map(audio_file_list, ref_rttm_file_list)
+        for k, audio_file_path in enumerate(audio_file_list):
+            uniq_id = get_uniq_id_from_audio_path(audio_file_path)
+            rttm_file = audio_rttm_map[uniq_id]['rttm_path']
+            if os.path.exists(rttm_file):
+                ref_labels = rttm_to_labels(rttm_file)
+                ref_labels_list.append(ref_labels)
+                reference = labels_to_pyannote_object(ref_labels)
+                all_references.append(reference)
+            else:
+                raise ValueError("No reference RTTM file provided.")
 
-            return diar_labels, None, None
+            pred_rttm = os.path.join(self.oracle_vad_dir, 'pred_rttms', uniq_id + '.rttm')
+            pred_labels = rttm_to_labels(pred_rttm)
+            diar_labels.append(pred_labels)
 
-        else:
-            audio_rttm_map = get_audio_rttm_map(audio_file_list, ref_rttm_file_list)
-            for k, audio_file_path in enumerate(audio_file_list):
-                uniq_id = get_uniq_id_from_audio_path(audio_file_path)
-                rttm_file = audio_rttm_map[uniq_id]['rttm_path']
-                if os.path.exists(rttm_file):
-                    ref_labels = rttm_to_labels(rttm_file)
-                    ref_labels_list.append(ref_labels)
-                    reference = labels_to_pyannote_object(ref_labels)
-                    all_references.append(reference)
-                else:
-                    raise ValueError("No reference RTTM file provided.")
-
-                pred_rttm = os.path.join(self.oracle_vad_dir, 'pred_rttms', uniq_id + '.rttm')
-                pred_labels = rttm_to_labels(pred_rttm)
-                diar_labels.append(pred_labels)
-
-                est_n_spk = self.get_num_of_spk_from_labels(pred_labels)
-                ref_n_spk = self.get_num_of_spk_from_labels(ref_labels)
-                hypothesis = labels_to_pyannote_object(pred_labels)
-                all_hypotheses.append(hypothesis)
-                DER, CER, FA, MISS, mapping = self.get_DER([reference], [hypothesis])
-                DER_result_dict[uniq_id] = {
-                    "DER": DER,
-                    "CER": CER,
-                    "FA": FA,
-                    "MISS": MISS,
-                    "n_spk": est_n_spk,
-                    "mapping": mapping[0],
-                    "spk_counting": (est_n_spk == ref_n_spk),
-                }
-                count_correct_spk_counting += int(est_n_spk == ref_n_spk)
-
-            DER, CER, FA, MISS, mapping = self.get_DER(all_references, all_hypotheses)
-            logging.info(
-                "Cumulative results of all the files:  \n FA: {:.4f}\t MISS {:.4f}\t\
-                    Diarization ER: {:.4f}\t, Confusion ER:{:.4f}".format(
-                    FA, MISS, DER, CER
-                )
-            )
-            DER_result_dict['total'] = {
+            est_n_spk = self.get_num_of_spk_from_labels(pred_labels)
+            ref_n_spk = self.get_num_of_spk_from_labels(ref_labels)
+            hypothesis = labels_to_pyannote_object(pred_labels)
+            all_hypotheses.append(hypothesis)
+            DER, CER, FA, MISS, mapping = self.get_DER_and_mapping([reference], [hypothesis])
+            DER_result_dict[uniq_id] = {
                 "DER": DER,
                 "CER": CER,
                 "FA": FA,
                 "MISS": MISS,
-                "spk_counting_acc": count_correct_spk_counting / len(audio_file_list),
+                "n_spk": est_n_spk,
+                "mapping": mapping[0],
+                "spk_counting": (est_n_spk == ref_n_spk),
             }
-            return diar_labels, ref_labels_list, DER_result_dict
+            count_correct_spk_counting += int(est_n_spk == ref_n_spk)
+
+        DER, CER, FA, MISS, mapping = self.get_DER_and_mapping(all_references, all_hypotheses)
+        logging.info(
+            "Cumulative results of all the files:  \n FA: {:.4f}\t MISS {:.4f}\t\
+                Diarization ER: {:.4f}\t, Confusion ER:{:.4f}".format(
+                FA, MISS, DER, CER
+            )
+        )
+        DER_result_dict['total'] = {
+            "DER": DER,
+            "CER": CER,
+            "FA": FA,
+            "MISS": MISS,
+            "spk_counting_acc": count_correct_spk_counting / len(audio_file_list),
+        }
+        return diar_labels, ref_labels_list, DER_result_dict
 
     def write_json_and_transcript(
-        self, audio_file_list, transcript_logits_list, diar_labels, word_list, word_ts_list, spaces_list,
+        self, audio_file_list, diar_labels, word_list, word_ts_list,
     ):
         total_riva_dict = {}
         for k, audio_file_path in enumerate(audio_file_list):
             uniq_id = get_uniq_id_from_audio_path(audio_file_path)
-            labels, spaces = diar_labels[k], spaces_list[k]
+            labels = diar_labels[k]
             audacity_label_words = []
             n_spk = self.get_num_of_spk_from_labels(labels)
             string_out = ''
@@ -682,7 +691,7 @@ class ASR_DIAR_OFFLINE(object):
         return oracle_manifest
 
     @staticmethod
-    def get_DER(all_reference, all_hypothesis):
+    def get_DER_and_mapping(all_reference, all_hypothesis):
         """
         Calculates DER from pyannotate objects.
 
